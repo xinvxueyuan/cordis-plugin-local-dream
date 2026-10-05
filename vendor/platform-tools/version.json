@@ -1,0 +1,25 @@
+{
+  "source": [
+    "https://dl.google.com/android/repository/platform-tools-latest-windows.zip",
+    "https://dl.google.com/android/repository/platform-tools-latest-linux.zip",
+    "https://dl.google.com/android/repository/platform-tools-latest-darwin.zip"
+  ],
+  "platforms": [
+    "win32-x64",
+    "linux-x64",
+    "darwin"
+  ],
+  "retrievedAt": "2026-10-05T15:39:54.769Z",
+  "adbVersion": "Android Debug Bridge version 1.0.41",
+  "files": {
+    "vendor/platform-tools/darwin/NOTICE.txt": "356cc66516060e4da6bdc53e6f0bbb8e8101673f326b73c68d535eddd04dd7b1",
+    "vendor/platform-tools/darwin/adb": "1811e253b21b12cbfda7201ebaf86c10e7ddcb5c606a7a81f7c82b4c429c2d3b",
+    "vendor/platform-tools/linux-x64/NOTICE.txt": "c29da8f704720fa1d3d802b834b86d9c023f20ae2596a8f2a4e17ed5490b17ae",
+    "vendor/platform-tools/linux-x64/adb": "a902be8f45c6c62e76c9efaf6947a0fa747c9cabd89a2ac8e0d16ecb30b3ed01",
+    "vendor/platform-tools/win32-x64/AdbWinApi.dll": "c1d653030b4bde65d3e07e4d0b0979e17be56df1436cdd15528630f27808050d",
+    "vendor/platform-tools/win32-x64/AdbWinUsbApi.dll": "0710e894d9b40f71a670c13c694079d564c92c1279da382cfe4850983aaebe1b",
+    "vendor/platform-tools/win32-x64/NOTICE.txt": "38ec8c6f5b7799c223ffeab1f9e81c2d5fc67b5e56d6424f649630ca1ee1a811",
+    "vendor/platform-tools/win32-x64/adb.exe": "b4a6b455702684652cccf7b46258b29e653538904359a58fd4931cf3ef286b3f"
+  },
+  "adbVersionSource": "executed win32-x64/adb.exe"
+}
