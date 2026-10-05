@@ -1,6 +1,6 @@
 # cordis-plugin-local-dream
 
-[![Node](https://img.shields.io/badge/node-%3E%3D20.3.0-informational)](https://nodejs.org/)
+[![npm version](https://img.shields.io/npm/v/@xinvxueyuan/cordis-plugin-local-dream)](https://www.npmjs.com/package/@xinvxueyuan/cordis-plugin-local-dream)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](LICENSE-MIT)
 [![GitHub](https://img.shields.io/github/stars/xinvxueyuan/cordis-plugin-local-dream)](https://github.com/xinvxueyuan/cordis-plugin-local-dream)
 
@@ -26,9 +26,7 @@ Cordis（DeepSeek Harness）插件：让 agent 直接驱动 Android 应用 **Loc
 
 重启后 agent 即可调用 `local_dream_api`、`local_dream_generate`、`local_dream_device`。
 
-上面这段 `file://` 源码直载是**当前推荐、本 profile 实际在用**的接法（本插件尚未发布到 npm）。
-
-**只有在本包发布到 npm 之后**，才可以改用 npm 包安装：
+也可以按 npm 包安装：
 
 ```sh
 dsh plugin add @xinvxueyuan/cordis-plugin-local-dream
@@ -183,10 +181,8 @@ npm run test:integration   # 真实设备冒烟；没有设备/主机时打印 S
 
 ## npm 发布（@xinvxueyuan/cordis-plugin-local-dream）
 
-> **注意**：本包尚未发布到 npm —— 首次发布需要先为 `@xinvxueyuan/cordis-plugin-local-dream` 配置 npm trusted publisher（或改用交互式 `npm login`），再完成最后的 2FA 批准步骤。
-
 - **仓库**: https://github.com/xinvxueyuan/cordis-plugin-local-dream
-- **npm**: **尚未发布到 npm**；发布后可用 `npm install @xinvxueyuan/cordis-plugin-local-dream`
+- **npm**: `npm install @xinvxueyuan/cordis-plugin-local-dream`
 - **许可**: MIT OR Apache-2.0（见 LICENSE-MIT / LICENSE-APACHE）
 
 ### 发布流程（维护者）— staged publishing
