@@ -1,5 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { inflateSync } from 'node:zlib'
 import { adbCandidates, buildDevicesArgs, buildForwardArgs, buildRemoveForwardArgs, findOnPath, parseDeviceList, parseForwardList, parseWifiIp, planForward, resolveAdb, selectDevice } from '../src/adb.ts'
@@ -201,6 +203,69 @@ test('findOnPath: PATH lookup with .exe suffix on Windows', () => {
   assert.equal(findOnPath('adb', { pathValue: '/usr/bin', platform: 'linux', exists: () => false }), undefined)
 })
 
+test('findOnPath: the default predicate skips a directory named adb and keeps scanning later PATH entries', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'local-dream-adb-'))
+  try {
+    // Real-world layout: an earlier PATH entry holds a DIRECTORY named `adb`
+    // (e.g. `C:\Program Files (x86)\pcsuite\adb\`) while the actual binary sits
+    // in a later entry. `existsSync` accepts the directory; a file-only
+    // predicate must reject it and continue.
+    const shadow = path.join(root, 'pcsuite')
+    mkdirSync(path.join(shadow, 'adb'), { recursive: true })
+    const realDir = path.join(root, 'shims')
+    mkdirSync(realDir, { recursive: true })
+    const binary = path.join(realDir, process.platform === 'win32' ? 'adb.exe' : 'adb')
+    writeFileSync(binary, '')
+
+    // Sanity: this is exactly the entry the old `existsSync` default accepted.
+    assert.equal(existsSync(path.join(shadow, 'adb')), true)
+    assert.equal(findOnPath('adb', { pathValue: `${shadow}${path.delimiter}${realDir}`, platform: process.platform }), binary)
+    // A PATH holding only the directory resolves to nothing, never a directory.
+    assert.equal(findOnPath('adb', { pathValue: shadow, platform: process.platform }), undefined)
+
+    // On the machine that originally reproduced this, pin the shipped predicate
+    // against the real directory itself (no-op elsewhere).
+    const pcsuite = 'C:\\Program Files (x86)\\pcsuite'
+    if (process.platform === 'win32' && existsSync(path.join(pcsuite, 'adb'))) {
+      assert.equal(findOnPath('adb', { pathValue: pcsuite, platform: 'win32' }), undefined)
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('findOnPath: an injected predicate stays authoritative and is asked per candidate', () => {
+  // A file-aware predicate reports the directory-shaped entry as a non-file, so
+  // the scan must continue to the later PATH entry (Windows also tries `.exe`).
+  const isRegularFile: Record<string, boolean> = {
+    'C:\\pcsuite\\adb': false,
+    'C:\\pcsuite\\adb.exe': false,
+    'C:\\shims\\adb.exe': true,
+  }
+  assert.equal(
+    findOnPath('adb', {
+      pathValue: 'C:\\pcsuite;C:\\shims',
+      platform: 'win32',
+      exists: (file) => isRegularFile[file] === true,
+    }),
+    'C:\\shims\\adb.exe',
+  )
+  // The option is still the injectable authority (existing fakes keep working).
+  const seen: string[] = []
+  assert.equal(
+    findOnPath('adb', {
+      pathValue: '/pcsuite',
+      platform: 'linux',
+      exists: (file) => {
+        seen.push(file)
+        return file === '/pcsuite/adb'
+      },
+    }),
+    '/pcsuite/adb',
+  )
+  assert.deepEqual(seen, ['/pcsuite/adb'])
+})
+
 test('adbCandidates: precedence config -> sdk -> PATH -> vendor', () => {
   const exists = (file: string) => file === '/opt/adb' || file === '/sdk/platform-tools/adb' || file === '/usr/local/bin/adb' || file === '/pkg/vendor/platform-tools/linux-x64/adb'
   const base = { platform: 'linux' as NodeJS.Platform, arch: 'x64', packageRoot: '/pkg', exists, env: { ANDROID_HOME: '/sdk', PATH: '/usr/local/bin' } as NodeJS.ProcessEnv }
@@ -255,6 +320,41 @@ test('resolveAdb: validates every candidate with `adb version` and reports all f
     resolveAdb({ adbPath: '/nope/adb', bundledAdbDir: '' }, { packageRoot: '/pkg', exists: () => false, run }),
     /config\.adbPath 指向的文件不存在/,
   )
+})
+
+test('resolveAdb: selects the PATH adb over the bundled vendor copy when both exist', async () => {
+  const calls: string[] = []
+  const run = async (bin: string, args: string[]) => {
+    calls.push(`${bin} ${args.join(' ')}`)
+    return { code: 0, stdout: 'Android Debug Bridge version 1.0.41\n', stderr: '' }
+  }
+  const exists = (file: string) => file === '/shims/adb' || file === '/pkg/vendor/platform-tools/linux-x64/adb'
+  const resolved = await resolveAdb(
+    { adbPath: '', bundledAdbDir: '' },
+    { packageRoot: '/pkg', platform: 'linux', arch: 'x64', env: { PATH: '/pcsuite:/shims' } as NodeJS.ProcessEnv, exists, run, chmod: () => {} },
+  )
+  assert.equal(resolved.source, 'path')
+  assert.equal(resolved.path, '/shims/adb')
+  // The vendor copy is never even probed once PATH yields a working adb.
+  assert.deepEqual(calls, ['/shims/adb version'])
+})
+
+test('resolveAdb: a PATH candidate whose spawn fails with ENOENT does not abort resolution', async () => {
+  const calls: string[] = []
+  const run = async (bin: string, args: string[]) => {
+    calls.push(`${bin} ${args.join(' ')}`)
+    if (bin === '/pcsuite/adb') throw new Error('ENOENT: spawn /pcsuite/adb ENOENT')
+    return { code: 0, stdout: 'Android Debug Bridge version 1.0.41\n', stderr: '' }
+  }
+  const exists = (file: string) => file === '/pcsuite/adb' || file === '/pkg/vendor/platform-tools/linux-x64/adb'
+  const resolved = await resolveAdb(
+    { adbPath: '', bundledAdbDir: '' },
+    { packageRoot: '/pkg', platform: 'linux', arch: 'x64', env: { PATH: '/pcsuite' } as NodeJS.ProcessEnv, exists, run, chmod: () => {} },
+  )
+  assert.equal(resolved.source, 'vendor')
+  assert.equal(resolved.path, '/pkg/vendor/platform-tools/linux-x64/adb')
+  assert.match(resolved.version, /Android Debug Bridge/)
+  assert.deepEqual(calls, ['/pcsuite/adb version', '/pkg/vendor/platform-tools/linux-x64/adb version'])
 })
 
 // --------------------------------------------------------- forward plan ---

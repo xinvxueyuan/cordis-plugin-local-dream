@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { chmodSync, existsSync as fsExistsSync } from 'node:fs'
+import { chmodSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { LocalDreamError } from './errors.ts'
@@ -294,6 +294,19 @@ export function joinForPlatform(platform: NodeJS.Platform, ...parts: string[]): 
   return cleaned.join(separator)
 }
 
+/**
+ * True only for a regular file. `existsSync` also matches directories, and a
+ * directory named `adb` on PATH would otherwise shadow the real binary on a
+ * later PATH entry (seen in the wild: `C:\Program Files (x86)\pcsuite\adb\`).
+ */
+function isFileSync(file: string): boolean {
+  try {
+    return statSync(file).isFile()
+  } catch {
+    return false
+  }
+}
+
 export interface FindOnPathOptions {
   pathValue?: string
   platform?: NodeJS.Platform
@@ -307,7 +320,7 @@ export interface FindOnPathOptions {
 export function findOnPath(command: string, options: FindOnPathOptions = {}): string | undefined {
   const pathValue = options.pathValue ?? process.env.PATH ?? ''
   const platform = options.platform ?? process.platform
-  const exists = options.exists ?? fsExistsSync
+  const exists = options.exists ?? isFileSync
   const suffixes = platform === 'win32' ? ['.exe', ''] : ['']
   const delimiter = platform === 'win32' ? ';' : ':'
   for (const directory of pathValue.split(delimiter)) {
@@ -362,7 +375,7 @@ export function adbCandidates(
   const env = options.env ?? process.env
   const platform = options.platform ?? process.platform
   const arch = options.arch ?? process.arch
-  const exists = options.exists ?? fsExistsSync
+  const exists = options.exists ?? isFileSync
   const binary = adbBinaryName(platform)
   const candidates: Candidate[] = []
 
@@ -402,7 +415,7 @@ export function adbCandidates(
  * half-installed SDK cannot win. `adb kill-server` is never run.
  */
 export async function resolveAdb(input: ResolveAdbInput, options: ResolveAdbOptions): Promise<ResolvedAdb> {
-  const exists = options.exists ?? fsExistsSync
+  const exists = options.exists ?? isFileSync
   const run = options.run ?? runCommand
   const chmod = options.chmod ?? ((file: string, mode: number) => chmodSync(file, mode))
   const platform = options.platform ?? process.platform
@@ -415,7 +428,7 @@ export async function resolveAdb(input: ResolveAdbInput, options: ResolveAdbOpti
 
   for (const candidate of candidates) {
     if (!exists(candidate.path)) {
-      failures.push(`${candidate.source}: ${candidate.path}（文件不存在）`)
+      failures.push(`${candidate.source}: ${candidate.path}（不存在或不是普通文件）`)
       continue
     }
     if (candidate.chmod && platform !== 'win32') {
