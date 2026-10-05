@@ -47,7 +47,7 @@ dsh plugin add @xinvxueyuan/cordis-plugin-local-dream
 | `mode` | `auto` | `auto`：先 LAN 再 USB；`lan` / `usb` 强制单一传输 |
 | `host` | `` | 手机局域网 IP/主机名；空 = 自动发现 |
 | `port` | `8081` | 手机端生成后端端口 |
-| `controlPort` | `8808` | 手机端 Device Link 控制平面端口；`0` = 关闭控制平面 |
+| `controlPort` | `8808` | 手机端 Device Link 控制平面端口；`0` = 关闭控制平面；主机模式本身即强制 LAN 绑定，**不需要**打开「允许局域网访问」 |
 | `localPort` | `0` | USB 转发本地端口；`0` = 优先 8081，被占用则挑空闲端口 |
 | `adbPath` | `` | 显式 adb 可执行文件（指定即唯一候选，不做回退） |
 | `bundledAdbDir` | `` | 覆盖内置 platform-tools 目录 |
@@ -124,19 +124,63 @@ dsh plugin add @xinvxueyuan/cordis-plugin-local-dream
 
 ## 两种局域网模式
 
-Local Dream 有两条完全不同的局域网路径，插件两者都支持：
+Local Dream 有两条通往 LAN 的路径，但**两条路径最终汇合到同一个布尔与同一个 `--listen_all`，因此绑定行为完全一致**：任意一条成立，原生后端就绑定 `0.0.0.0:8081`。**主机模式（受控端）即使关闭「允许局域网访问」也会向 LAN 开放 —— 这是 `||` 的预期行为，不是缺陷。**
+
+因果链（每一跳都可在上游 `xororz/local-dream`（分支 `master`）里按 `file:line` 复核）：
+
+```text
+[开关] ModelListScreen.kt:1791-1798
+  preferences.edit { putBoolean("listen_on_all_addresses", it) }
+        |
+        |   [主机模式] RemoteHostService.kt:86   updateState(running = true)
+        |             RemoteHostService.kt:112  updateState(running = false)  (onDestroy)
+        |             -> 暴露为 RemoteHostService.isRunning（内存态 MutableStateFlow）
+        v                      v
+        +----------+-----------+
+                   |
+                   v
+  BackendService.kt:231-234
+  val listenOnAll = getSharedPreferences("app_prefs", MODE_PRIVATE)
+      .getBoolean("listen_on_all_addresses", false) ||
+      RemoteHostService.isRunning.value        <- 布尔 OR：任一为真即 LAN
+                   |
+                   v
+  BackendService.kt:588
+  if (listenOnAll) {
+      command += "--listen_all"                <- 全仓库唯一追加该 flag 的地方
+  }
+                   |
+                   v
+  app/src/main/cpp/src/main.cpp : --listen_all
+  "Listen on 0.0.0.0 instead of 127.0.0.1"
+                   |
+                   v
+  0.0.0.0:8081（生成 API）
+```
+
+`BackendService.kt:231-234` 上方的注释还指出：bind address 需求变化会命中 config 相等性检查，从而**重启**后端以重新绑定 —— 所以刚进入主机模式的那一刻，8081 不一定马上可达。
 
 | | 普通「允许局域网访问」 | Device Link「主机模式」 |
 | --- | --- | --- |
+| 绑定行为 | 开关打开时 `0.0.0.0:8081` | **完全相同**：`||` 合并后走同一个 `--listen_all` → `0.0.0.0:8081` |
 | 端口 | 只有 8081 | **8808 控制平面** + 8081 生成后端 |
+| 唯一的能力差异 | 没有控制平面 | **8808 控制平面**：列模型 / 远程 `select` 启动后端 / `stop` |
 | 谁能启动后端 | 用户必须在 App 里手动加载模型 | 插件可 `POST /select` 启动 |
 | 8081 未监听时 | 后端没起来 | **正常状态**，`/select` 之后才会监听 |
 | 身份指纹 | `/tokenize` 返回 `max_length === 77` | `/info` 返回 `app === "localdream"` |
-| 插件行为 | 直接探活 → 出图 | `/info` → `/status` → 必要时 `/select` → 轮询到 `running` → `/health` |
+| 生命周期 | 持久偏好（写进 `app_prefs`），重启 App 仍在，不需要任何服务 | 运行时状态（内存态 `StateFlow`），只活在服务存活期间 |
+| 服务退出时 | — | 主动关停：`RemoteHostService.kt:112` 的 `onDestroy` 关掉 8808 控制服务，并发送 `BackendService.ACTION_STOP` 把 8081 后端一并停掉 |
+| 与开关的关系 | — | **强制 LAN 打开**，与偏好开关的取值无关 |
 
 > 首次使用主机模式需要**在 App 里手动进入一次**（下拉菜单里的 "Device Link / 设备互联"）；进入后 8808 立刻开始监听，后端处于 standby，由插件负责 `/select` 激活。
 
-**普通局域网模式的开启方式**：在手机上打开 Local Dream → 进入设置（齿轮）→ 打开 **「允许局域网访问」/ "Allow LAN access"** 开关 → 回到主界面**手动加载一次模型**，此时后端才会在 `0.0.0.0:8081` 上监听。之后插件即可通过 `config.host`（或自动发现）直连；此时没有 8808，模型切换必须由用户在 App 内完成（`autoSelect` 对该模式无效，此时 `local_dream_device` 的 `models`/`select`/`stop` 动作都会报"控制端口不可达"）。
+**插件如何选择**：本插件把两者当作不同的 LAN 模式，原因只有一个 —— 只有主机模式提供插件自动 `/select` 所需的 **8808 控制平面**；只打开「允许局域网访问」时，后端必须**已经由人在 App 内启动并加载好模型**，因此 `autoSelect` 在该路径上没有任何作用（`models`/`select`/`stop` 会报"控制端口不可达"）。这也是探活顺序的由来：**先探 8808 `/info` 指纹（`app === "localdream"`，最强信号），再探 8081 `/health`。**
+
+**例外（独立放大界面）**：standalone 放大界面有自己的启动路径，**完全不看主机模式** —— `UpscaleScreen.kt:191` 只读偏好开关，并据此给自己的进程追加 `--listen_all`。所以在"主机模式开、偏好关"时，那个独立放大进程仍是 localhost-only；经由 `BackendService` 启动的放大才会带上 `--listen_all`。
+
+> **上游注释已过时（勿照抄）**：`RemoteHostService.kt:43` 的 KDoc 声称该服务「flips the `[KEY_HOST_MODE_ACTIVE]` preference so BackendService starts the native backend with `--listen_all`」。全仓库检索显示 `KEY_HOST_MODE_ACTIVE` **只存在于这条文档注释里**：没有任何声明、读取或写入。真实机制是上面那条内存态 `MutableStateFlow`（`RemoteHostService.isRunning`）。
+
+**普通局域网模式的开启方式**：在手机上打开 Local Dream → 进入设置（齿轮）→ 打开 **「允许局域网访问」/ "Allow LAN access"** 开关 → 回到主界面**手动加载一次模型**，后端即在该路径所要求的 `0.0.0.0:8081` 上监听（主机模式不需要这个开关，见上）。之后插件即可通过 `config.host`（或自动发现）直连；此时没有 8808，模型切换必须由用户在 App 内完成。
 
 控制平面路由（全部 JSON，**无任何鉴权**，与 App 的"允许局域网访问"信任模型一致）：
 
@@ -148,7 +192,7 @@ Local Dream 有两条完全不同的局域网路径，插件两者都支持：
 | `GET /status` | `{"serving_model_id":...,"state":"idle|starting|running|error","message":...,"error_model_id":...,"width":...,"height":...}`；插件要求 **model_id + width + height 完全匹配**才算 ready，绝不把仍在服务旧分辨率的进程当作就绪 |
 | `POST /stop` | `{"model_id":"<id>"}`（可省略）；model_id 非当前选择时返回 `{"ok":true,"ignored":true}`，插件如实报告 |
 
-主机模式下 8081 由原生后端在 `--listen_all` 下提供：`/generate`、`/tokenize`、`/health`、`/upscale`（权重路径走 `X-Upscaler-Path` 头）。插件用 `GET /health` 作为生成端的主探活手段，`/tokenize` 指纹作为二次身份确认。
+8081 由原生后端在 `--listen_all` 下提供（**上面两条路径都会走到这里，不是主机模式专属**）：`/generate`、`/tokenize`、`/health`、`/upscale`（权重路径走 `X-Upscaler-Path` 头）。插件用 `GET /health` 作为生成端的主探活手段，`/tokenize` 指纹作为二次身份确认。
 
 ## 开发
 
