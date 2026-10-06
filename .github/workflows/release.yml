@@ -1,0 +1,115 @@
+name: Release
+
+# 构建发布产物并创建 GitHub Release：npm pack 的 tgz + SHA256SUMS 作为附件，
+# 并用 actions/attest-build-provenance 为两者生成构建来源证明。
+#
+# 本工作流**不做任何 npm publish** —— npm 发布由 publish.yml 负责。
+# 它也**不会创建 tag**：`gh release create --verify-tag` 要求 tag 已经存在，
+# tag 由维护者以 annotated + GPG 签名的方式推送（见 README「GitHub Release 与签名」）。
+#
+# 所有 `uses:` 都 pin 到完整 40 位 commit SHA（Dependabot 的 github-actions
+# 生态负责推进，见 .github/dependabot.yml）。
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '要发布的 tag（形如 v0.1.0；必须已存在于本仓库）'
+        required: true
+        type: string
+
+permissions:
+  contents: write       # 创建 Release、上传附件
+  id-token: write       # Sigstore 短期证书签名（构建来源证明）
+  attestations: write   # 写入 artifact attestation
+
+jobs:
+  release:
+    name: Build artifacts + create Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve target tag
+        id: ref
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            TAG="${INPUT_TAG}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          case "$TAG" in
+            v*) ;;
+            *) echo "::error::tag '${TAG}' 必须以 v 开头（形如 v0.1.0）"; exit 1 ;;
+          esac
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "目标 tag：${TAG}"
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ steps.ref.outputs.tag }}
+          fetch-depth: 0        # gh release create --generate-notes 需要完整提交历史
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Verify tag matches package version
+        run: |
+          TAG="${{ steps.ref.outputs.tag }}"
+          PKG="$(node -p "require('./package.json').version")"
+          if [ "v${PKG}" != "$TAG" ]; then
+            echo "::error::tag ${TAG} does not match package version ${PKG}"
+            exit 1
+          fi
+
+      - run: npm run build
+
+      - name: Pack tarball (npm pack)
+        id: pack
+        run: |
+          TGZ="$(npm pack --silent 2>/dev/null | tail -n 1)"
+          if [ -z "$TGZ" ] || [ ! -f "$TGZ" ]; then
+            echo "::error::npm pack 未产出 tgz"
+            exit 1
+          fi
+          echo "tgz=${TGZ}" >> "$GITHUB_OUTPUT"
+          echo "packed: ${TGZ}"
+
+      - name: Generate SHA256SUMS
+        run: |
+          sha256sum "${{ steps.pack.outputs.tgz }}" > SHA256SUMS
+          sha256sum -c SHA256SUMS
+          cat SHA256SUMS
+
+      # 对 tgz 与 SHA256SUMS 两者都做构建来源证明（subject-path 支持多行路径列表）。
+      # 校验方式：gh attestation verify <file> --repo xinvxueyuan/cordis-plugin-local-dream
+      - name: Attest build provenance (tgz + SHA256SUMS)
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            ${{ steps.pack.outputs.tgz }}
+            SHA256SUMS
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.ref.outputs.tag }}"
+          TGZ="${{ steps.pack.outputs.tgz }}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release ${TAG} 已存在：覆盖上传附件并保持既有正文"
+            gh release upload "$TAG" "${TGZ}" SHA256SUMS --clobber
+            gh release edit "$TAG" --title "$TAG"
+          else
+            gh release create "$TAG" "${TGZ}" SHA256SUMS \
+              --title "$TAG" \
+              --verify-tag \
+              --generate-notes
+          fi
+          gh release view "$TAG" --json tagName,name,url,assets

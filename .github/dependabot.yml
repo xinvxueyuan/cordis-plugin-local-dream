@@ -1,0 +1,44 @@
+version: 2
+updates:
+  # GitHub Actions：本仓库所有 workflow 的 `uses:` 都 pin 到了完整 40 位 commit SHA，
+  # Dependabot 是让这些 pin 持续保持最新（且能拿到安全更新）的唯一途径。
+  # minor/patch 合并成一条 PR；major 仍单独成 PR，便于逐个审阅。
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore
+      include: scope
+    labels:
+      - dependencies
+      - github-actions
+    groups:
+      github-actions-minor-patch:
+        patterns:
+          - '*'
+        update-types:
+          - minor
+          - patch
+
+  # npm：本仓库是库（library），发布的包会被下游安装，因此依赖更新需要人工审阅。
+  # 并发 PR 上限压到 5，并把 minor/patch 合并成一条 PR 以减少噪声；
+  # major 单独成 PR（可能含破坏性变更）。
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore
+      include: scope
+    labels:
+      - dependencies
+    groups:
+      npm-minor-patch:
+        patterns:
+          - '*'
+        update-types:
+          - minor
+          - patch

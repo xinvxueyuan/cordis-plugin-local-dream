@@ -22,8 +22,8 @@ jobs:
     name: Test (node 22)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: npm
@@ -43,8 +43,8 @@ jobs:
       contents: read
       id-token: write   # OIDC：npm 可信发布所需
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
@@ -58,9 +58,38 @@ jobs:
             echo "::error::tag v$TAG does not match package version $PKG"
             exit 1
           fi
+      # 幂等守卫：该版本已存在于 registry 时跳过发布，避免重推 tag 时出现必然失败的公开红叉。
+      - name: Check whether this version is already published
+        id: published
+        run: |
+          PKG_NAME="$(node -p "require('./package.json').name")"
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          SPEC="${PKG_NAME}@${PKG_VERSION}"
+          CODE=0
+          OUT="$(npm view "$SPEC" version 2>&1)" || CODE=$?
+          if [ "$CODE" -eq 0 ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::${SPEC} 已存在于 registry —— 该版本已存在，跳过发布"
+            {
+              echo "## 该版本已存在，跳过发布"
+              echo ""
+              echo "\`npm view ${SPEC} version\` → \`${OUT}\`"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          # 非 0 只有在「包/版本不存在」时才是正常的未发布分支；
+          # 其它错误（网络、鉴权、registry 故障）必须让 job 失败，不得被吞掉。
+          if printf '%s' "$OUT" | grep -qE 'E404|ETARGET|notarget|is not in this registry|No matching version found|No match found'; then
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "${SPEC} 尚未发布，继续发布流程。npm view 输出：${OUT}"
+            exit 0
+          fi
+          echo "::error::检查 ${SPEC} 是否已发布时出错（不按未发布处理）：${OUT}"
+          exit 1
       # Staged publishing：CI 无 2FA 把版本放入 stage 队列，维护者用 2FA 批准后才真正上线。
       # 认证走 OIDC 可信发布（permissions.id-token: write），不依赖任何 NPM_TOKEN。
       - name: Stage package (with provenance)
+        if: steps.published.outputs.exists != 'true'
         run: npm stage publish --provenance --access public
 
   github-packages:
@@ -72,8 +101,8 @@ jobs:
       contents: read
       packages: write   # GITHUB_TOKEN 需要它才能发布包
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           registry-url: https://npm.pkg.github.com
@@ -88,9 +117,41 @@ jobs:
             echo "::error::tag v$TAG does not match package version $PKG"
             exit 1
           fi
+      # 幂等守卫：npm.pkg.github.com 即使读取公开包也要求认证，
+      # 因此复用本 job 发布步骤已经在用的内置 GITHUB_TOKEN（不是新增的任何 secret）。
+      - name: Check whether this version is already published
+        id: published
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PKG_NAME="$(node -p "require('./package.json').name")"
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          SPEC="${PKG_NAME}@${PKG_VERSION}"
+          CODE=0
+          OUT="$(npm view "$SPEC" version 2>&1)" || CODE=$?
+          if [ "$CODE" -eq 0 ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::${SPEC} 已存在于 registry —— 该版本已存在，跳过发布"
+            {
+              echo "## 该版本已存在，跳过发布"
+              echo ""
+              echo "\`npm view ${SPEC} version\` → \`${OUT}\`"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          # 非 0 只有在「包/版本不存在」时才是正常的未发布分支；
+          # 其它错误（网络、鉴权、registry 故障）必须让 job 失败，不得被吞掉。
+          if printf '%s' "$OUT" | grep -qE 'E404|ETARGET|notarget|is not in this registry|No matching version found|No match found'; then
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "${SPEC} 尚未发布，继续发布流程。npm view 输出：${OUT}"
+            exit 0
+          fi
+          echo "::error::检查 ${SPEC} 是否已发布时出错（不按未发布处理）：${OUT}"
+          exit 1
       # 发布到 GitHub Packages：包与仓库通过 package.json 的 repository 字段关联。
       # 同一份包会同时存在于 npmjs.org（staged）与 npm.pkg.github.com。
       - name: Publish to GitHub Packages
+        if: steps.published.outputs.exists != 'true'
         run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

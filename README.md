@@ -4,13 +4,23 @@
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](LICENSE-MIT)
 [![GitHub](https://img.shields.io/github/stars/xinvxueyuan/cordis-plugin-local-dream)](https://github.com/xinvxueyuan/cordis-plugin-local-dream)
 
-Cordis（DeepSeek Harness）插件：让 agent 直接驱动 Android 应用 **Local Dream**（内置 HTTP 后端的 Stable Diffusion 应用）出图。
+> Cordis（DeepSeek Harness）插件：让 agent 直接驱动 Android 应用 **Local Dream**（内置 HTTP 后端的 Stable Diffusion 应用）出图。
+
 **默认走局域网直连（LAN）；局域网不可用时自动回退 USB（adb forward）；两者都不可用时按 `waitTimeoutMs` 轮询等待。**
 在 "设备互联 / 主机模式" 下，插件还会自己驱动 8808 控制平面（`POST /select` 启动 8081 生成后端），因此"手机在跑但后端没起来"这种正常状态不会变成报错。
 
 - 三个工具：`local_dream_api`（通用端点直通）、`local_dream_generate`（高层出图，直接落盘 PNG）、`local_dream_device`（连接与设备生命周期）。
 - 只依赖 Node 内置能力（全局 `fetch`、`node:zlib`、`node:net`、`node:child_process`），**零运行时依赖**。
 - SSE 增量解析 + 原始 RGB 像素校验 + 自研 PNG 编码器；图片字节不会进入模型上下文。
+
+## 安全不变量与副作用披露
+
+- 本插件会**调用 `adb`**（`devices -l`、`forward`、`forward --list`、`forward --remove`、`shell ip -f inet addr show wlan0`）。
+- 当 `discovery.enabled` 为 `true`（默认）时，插件会对**本机所有非回环 IPv4 网段**的 `port`（默认 8081）与 `controlPort`（默认 8808）发起 TCP 连接扫描，用于发现手机；用 `discovery.subnets` 可把范围限制到指定 CIDR，或直接 `discovery.enabled: false` 关闭。
+- 控制平面（8808）**没有鉴权**，任何能访问该端口的人都能切换模型/停止后端；这正是 Local Dream 主机模式自身的信任模型。请在可信局域网中使用。
+- 出图请求的 prompt/图片只在**本机 → 手机**之间传输，插件不会把任何内容发往第三方。
+
+本插件**不**执行 `adb kill-server`，也不删除别人的 forward（见「设计要点」）。它唯一的本地写入是出图结果 PNG 落到 `outputDir`。
 
 ## 安装
 
@@ -194,6 +204,20 @@ Local Dream 有两条通往 LAN 的路径，但**两条路径最终汇合到同�
 
 8081 由原生后端在 `--listen_all` 下提供（**上面两条路径都会走到这里，不是主机模式专属**）：`/generate`、`/tokenize`、`/health`、`/upscale`（权重路径走 `X-Upscaler-Path` 头）。插件用 `GET /health` 作为生成端的主探活手段，`/tokenize` 指纹作为二次身份确认。
 
+## 边界与已知限制
+
+- **只驱动 Local Dream 这一个 App**：身份靠指纹确认（控制平面 `/info` 的 `app === "localdream"`，或生成端 `/tokenize` 的 `max_length === 77`），其它服务不会被误当成后端。
+- **必须有一条可用的传输路径**：要么手机与主机在可达的局域网内，要么本机有可用的 `adb`（`config.adbPath` → `ANDROID_HOME`/`ANDROID_SDK_ROOT` → `PATH` → 内置 `vendor/platform-tools`，见「adb 解析层级」）。两条都不通时最终以 `waitTimeoutMs` 超时收尾。
+- **多设备绝不猜测**：`adb devices -l` 里状态为 `device` 的条目多于一个时直接抛错，必须显式配置 `serial`。
+- **不能替你下载模型**：`models` 只列出手机**已下载**的模型；插件不会下载或安装权重。
+- **主机模式需要人工首次进入**：8808 控制平面只在 App 里手动进入过 "Device Link / 设备互联" 后才存在；纯「允许局域网访问」路径下 `autoSelect` 不起作用。
+- **控制平面无鉴权**：8808 上的任何客户端都能切模型/停后端（这是 App 自身的信任模型）；请只在可信局域网中使用，或用 `controlPort: 0` 关闭它。
+- **自动发现可能漏掉主机**：默认只扫每个网卡的 /24，且受 `discovery.maxHosts`（默认 1024）与 `connectTimeoutMs` 限制；跨网段/大网段主机需要显式配置 `host` 或 `discovery.subnets`。
+- **图片只走 RGB**：`complete` 时强制校验 `channels === 3` 且 `bytes.length === width*height*channels`，非 3 通道的返回会被判为异常而拒绝编码。
+- **`port` 覆盖仅 LAN 有效**：USB 转发的端口由 `localPort` 决定，单次调用的 `port` 覆盖在 USB 传输下不生效。
+- **`requestTimeoutMs` 是静默预算**：它衡量的是 SSE **两次数据之间的间隔**，不是整次请求的总时长上限；正常出图慢但持续有进度就不会被判超时。
+- **集成冒烟需要真机**：`npm run test:integration` 在无设备/无主机时打印 SKIP 并以 0 退出，因此 CI 里跑不出真实出图链路。
+
 ## 开发
 
 ```sh
@@ -215,13 +239,6 @@ npm run test:integration   # 真实设备冒烟；没有设备/主机时打印 S
 - **用 `/health` 而不是 `/tokenize` 做探活**：`/health` 更便宜，`/tokenize` 保留为身份指纹。
 - **不杀 adb server**：插件只做 `adb devices`/`forward`/`shell`，**从不执行 `adb kill-server`**，也不删除别人的 forward；`disconnect` 只清理自己创建的那几条。
 - **主机模式下 8081 关闭是正常态**：不会当作错误，而是驱动 `/select` 让后端起来。
-
-## 安全与副作用披露
-
-- 本插件会**调用 `adb`**（`devices -l`、`forward`、`forward --list`、`forward --remove`、`shell ip -f inet addr show wlan0`）。
-- 当 `discovery.enabled` 为 `true`（默认）时，插件会对**本机所有非回环 IPv4 网段**的 `port`（默认 8081）与 `controlPort`（默认 8808）发起 TCP 连接扫描，用于发现手机；用 `discovery.subnets` 可把范围限制到指定 CIDR，或直接 `discovery.enabled: false` 关闭。
-- 控制平面（8808）**没有鉴权**，任何能访问该端口的人都能切换模型/停止后端；这正是 Local Dream 主机模式自身的信任模型。请在可信局域网中使用。
-- 出图请求的 prompt/图片只在**本机 → 手机**之间传输，插件不会把任何内容发往第三方。
 
 ## npm 发布（@xinvxueyuan/cordis-plugin-local-dream）
 
@@ -248,3 +265,58 @@ npm stage approve <stage-id>                            # 需要 2FA
 ```
 
 （旧版 `npm publish` 直发流程已被 CI 的 staged 流程取代。）
+
+`publish.yml` 在两个发布 job 前都有幂等守卫：先用 `npm view "<包名>@<package.json 的 version>" version`
+判断该版本是否已存在于目标 registry，已存在就跳过发布（并在 Step Summary 写明"该版本已存在，跳过发布"），
+因此对已发布版本重推 tag 不会产生必然失败的公开红叉。其它检查错误（网络、鉴权、registry 故障）仍会让 job 失败。
+
+### GitHub Release 与签名
+
+> **现状（务必如实理解）**：以下机制描述的是**已经写进本仓库、但尚未实际执行过**的流程。
+> 截至写下这段文字，本仓库**还没有产生过任何 GitHub Release**（远端目前也没有任何 tag），所以下面没有任何"已发布"的既成事实。
+
+| 环节 | 将采用的机制 |
+| --- | --- |
+| tag | **annotated 且 GPG 签名**的 tag（`git tag -s`），GitHub 上会显示 **Verified** 徽标。tag 由维护者在本机用私钥创建并推送，**私钥永不进入 CI**。 |
+| Release 附件 | `.github/workflows/release.yml` 在 tag 推送（或手动 `workflow_dispatch` 指定 tag）时执行 `npm pack`，把产出的 `*.tgz` 与 `SHA256SUMS` 上传为 Release 附件。Release 标题即 tag，正文由 `gh release create --generate-notes` 依据 commit 列表自动生成。 |
+| 校验和 | `SHA256SUMS` 记录该 tgz 的 sha256（工作流内以 `sha256sum -c` 自校验）。 |
+| 校验和的分离签名 | 维护者在本机用**私钥**对 `SHA256SUMS` 生成分离签名 `SHA256SUMS.asc`（`gpg --armor --detach-sign SHA256SUMS`），再手工把 `.asc` 附到 Release 上。**这一步目前没有自动化**，私钥也不进 CI；校验方用 `gpg --verify` 验签。 |
+| 构建来源证明 | `release.yml` 调用 `actions/attest-build-provenance`（pin 到 commit SHA），为 **tgz 与 SHA256SUMS 两者**生成 Sigstore 签名的 SLSA 构建来源证明，可用 `gh attestation verify` 校验。 |
+| npm 侧 | `release.yml` **完全不执行任何 npm publish**；npm 发布只由上面的 `publish.yml` staged publishing 负责。 |
+
+维护者操作顺序（**尚未执行过**）：
+
+```sh
+# 1) 本机确认工作区干净、package.json 的 version 已就位（版本号由发布者手工提升）
+git status --porcelain
+
+# 2) 创建 annotated + GPG 签名 tag（私钥仅在本机使用；本机需能完成 GPG 签名）
+git tag -s v0.1.1 -m "v0.1.1"
+
+# 3) 只推 tag —— release.yml 会构建产物、生成来源证明并创建 Release
+git push origin v0.1.1
+```
+
+校验方式：
+
+```sh
+# 校验附件未被篡改
+sha256sum -c SHA256SUMS
+
+# 校验分离签名（需要维护者的公钥）
+gpg --verify SHA256SUMS.asc SHA256SUMS
+
+# 校验构建来源证明（需要 gh CLI）
+gh attestation verify xinvxueyuan-cordis-plugin-local-dream-0.1.1.tgz --repo xinvxueyuan/cordis-plugin-local-dream
+gh attestation verify SHA256SUMS --repo xinvxueyuan/cordis-plugin-local-dream
+```
+
+补充说明：
+
+- `release.yml` 使用 `gh release create --verify-tag`，**要求 tag 已存在、不会自行创建 tag**；重复运行会转为"覆盖上传附件"。
+- 所有 workflow 的 `uses:` 都 pin 到完整 40 位 commit SHA（当前：`actions/checkout` v4.4.0、`actions/setup-node` v4.4.0、`actions/attest-build-provenance` v4.2.2），由 `.github/dependabot.yml` 的 `github-actions` 生态负责推进。
+
+## 许可
+
+本仓库采用 **MIT OR Apache-2.0** 双许可（与 `package.json` 的 `license` 字段一致），
+许可证原文见 [LICENSE-MIT](LICENSE-MIT) 与 [LICENSE-APACHE](LICENSE-APACHE)。
