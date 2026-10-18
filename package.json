@@ -1,6 +1,6 @@
 {
   "name": "@xinvxueyuan/cordis-plugin-local-dream",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Cordis (DeepSeek Harness) plugin: drive the Android Local Dream Stable Diffusion app over its embedded HTTP backend — LAN-first, USB/adb fallback — with automatic device connection management",
   "type": "module",
   "main": "lib/index.js",
@@ -62,11 +62,11 @@
   "license": "MIT OR Apache-2.0",
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
-    "@deepseek-ai/dsh-tools": "^0.1.0-rc.6 || ^0.2.0-rc.1"
+    "@deepseek-ai/dsh-tools": "^0.1.0-rc.6 || ^0.2.0-rc.1 || ^0.2.1-rc.2"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
-    "@deepseek-ai/dsh-tools": "^0.1.0-rc.6 || ^0.2.0-rc.1",
+    "@deepseek-ai/dsh-tools": "^0.2.1-rc.2",
     "@deepseek-ai/schemastery": "^3.18.1",
     "@types/node": "^24.0.0",
     "typescript": "^5.9.0"
