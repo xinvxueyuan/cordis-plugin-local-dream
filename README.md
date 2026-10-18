@@ -272,8 +272,21 @@ npm stage approve <stage-id>                            # 需要 2FA
 
 ### GitHub Release 与签名
 
-> **现状（务必如实理解）**：以下机制描述的是**已经写进本仓库、但尚未实际执行过**的流程。
-> 截至写下这段文字，本仓库**还没有产生过任何 GitHub Release**（远端目前也没有任何 tag），所以下面没有任何"已发布"的既成事实。
+> **现状（务必如实理解，2026-10-19 更新）**：以下机制**已在真实发布中执行过**，不再是纸面流程。
+> 已执行的 Release：`v0.1.0`（2026-10-06）与 **`v0.1.1`（2026-10-19）** —— 每次都创建 annotated + GPG 签名 tag，附件为 `*.tgz` 与 `SHA256SUMS`，tgz 与 SHA256SUMS 都带构建来源证明（`SHA256SUMS.asc` 是维护者手工附加的分离签名，见下表）。
+> 本节此前写的"尚未实际执行过、还没有产生过任何 GitHub Release"**在 `v0.1.0` 时即已过时**，现予更正。
+
+**当前发布事实（2026-10-19，v0.1.1）**
+
+| 项目 | 状态 |
+| --- | --- |
+| npm registry（registry.npmjs.org） | `latest` = **0.1.1**（已上线 2026-10-19）。入队来源：stage id `f332c3fb-e6b0-47cd-8172-80df2e7a38a1`、shasum `b3be9a005a6044c8b32d303036cca10fd19699d9`、`staged by: GitHub Actions (trusted automation)`；批准（`npm stage approve f332c3fb-…`）由**维护者本人在 2FA 下**执行，发布者未代做；批准后 `npm stage list` 已清空 |
+| GitHub Packages（npm.pkg.github.com） | `cordis-plugin-local-dream@0.1.1`（本轮 `github-packages` job success） |
+| GitHub Release | <https://github.com/xinvxueyuan/cordis-plugin-local-dream/releases/tag/v0.1.1>，资产 `xinvxueyuan-cordis-plugin-local-dream-0.1.1.tgz`（17 708 810 B）与 `SHA256SUMS`；tgz sha256 = `a008f18f428eeca823aab6bde60548bdfc1b8eaaa92da5a37c8cafeac60b9b23`（与 `SHA256SUMS` 一致），其 **SHA1 = `b3be9a005a6044c8b32d303036cca10fd19699d9`** == npm 上 published shasum ⇒ **同一份字节** |
+| tag | annotated + GPG `v0.1.1`；tag 对象 `7504751635b27f7acd790e81dd688716e5e5f56f`，指向提交 `9cc5ce08dc281be0469616cbabab3f800969a2f4` |
+| 构建来源证明 | `gh attestation verify <tgz> --repo xinvxueyuan/cordis-plugin-local-dream --source-ref refs/tags/v0.1.1` **退出 0**；负向对照 `refs/heads/main` **退出 1** ⇒ 证明只命中本 tag |
+| CI（如实，含一次失败与一次补跑） | ① tag 推送触发的 Publish run [`39146390743`](https://github.com/xinvxueyuan/cordis-plugin-local-dream/actions/runs/39146390743) **failure**：`Stage for npm` 报 `Unknown command: "stage"` —— 该 job 当时跑在 **node 22**，其自带 npm 没有 staged publishing 子命令（同 run 的 `Test (node 22)` 与 `Publish to GitHub Packages` 均 success）。② 修复提交 `bbd3528` 把该 job 改为 **node 24**，与另外三个兄弟插件一致。③ 之后用 `workflow_dispatch`（`target=npm`）补跑：首次 [`39146684462`](https://github.com/xinvxueyuan/cordis-plugin-local-dream/actions/runs/39146684462) 仍 **failure**（`E401 Unable to authenticate`，registry 侧可信发布尚未配置；重试同样失败 ⇒ 非偶发），配好之后 [`39147604193`](https://github.com/xinvxueyuan/cordis-plugin-local-dream/actions/runs/39147604193) **success** 并入队。④ Release run [`39146390697`](https://github.com/xinvxueyuan/cordis-plugin-local-dream/actions/runs/39146390697) **success** |
+| 本轮源码 | 发布提交 `9cc5ce0`（version 0.1.0→0.1.1；`dsh-tools` peer 加宽为 `^0.1.0-rc.6 \|\| ^0.2.0-rc.1 \|\| ^0.2.1-rc.2`、devDep 升到 `^0.2.1-rc.2`；`package-lock.json` 重生）。**`src/`、`test/` 零改动**：插件只消费 `defineTool` 与 `ToolCallKind`，两版逐字未变；typecheck、build 与 **63/63** 测试在 `0.2.1-rc.2` 下全绿；独立验证者（与实现者无共享上下文）在 `%TEMP%` 副本用真实 `npm ci` 复跑四道门禁，全 exit 0 |
 
 | 环节 | 将采用的机制 |
 | --- | --- |
@@ -284,7 +297,7 @@ npm stage approve <stage-id>                            # 需要 2FA
 | 构建来源证明 | `release.yml` 调用 `actions/attest-build-provenance`（pin 到 commit SHA），为 **tgz 与 SHA256SUMS 两者**生成 Sigstore 签名的 SLSA 构建来源证明，可用 `gh attestation verify` 校验。 |
 | npm 侧 | `release.yml` **完全不执行任何 npm publish**；npm 发布只由上面的 `publish.yml` staged publishing 负责。 |
 
-维护者操作顺序（**尚未执行过**）：
+维护者操作顺序（`v0.1.0`、`v0.1.1` 均已按此执行）：
 
 ```sh
 # 1) 本机确认工作区干净、package.json 的 version 已就位（版本号由发布者手工提升）
