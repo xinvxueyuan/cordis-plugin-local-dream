@@ -50,6 +50,16 @@ dsh plugin add @xinvxueyuan/cordis-plugin-local-dream
         mode: auto
 ```
 
+## 组合节点（官方）
+
+本插件以 bundle 形态声明它消费的官方服务节点。`cordis.patch.yml` 的 `inject` 与 `src/index.ts` 的 `export const inject` **必须保持一致**——`test/manifest.test.ts` 会从两处分别用正则提取再做集合相等断言，任何一侧漂移都会让 `npm test` 变红。
+
+| 服务键 | 官方提供方 | 必需性 | 用途 |
+| --- | --- | --- | --- |
+| `tools` | `@deepseek-ai/dsh-tools` | 必需 | 注册 `local_dream_api` / `local_dream_generate` / `local_dream_device` 工具 |
+
+`cordis.patch.yml` 是官方 bundle patch，由 `plugin_manager install_bundle`（或任何选中本 bundle 的补丁层）应用；`package.json` 的 `dsh.bundle.patch` 指向它，`id: local-dream` 是 Loader 条目 id，`name` 是本包名。
+
 ## 配置（Config）
 
 | 字段 | 默认 | 说明 |

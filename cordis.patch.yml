@@ -1,0 +1,11 @@
+# Bundle patch for @xinvxueyuan/cordis-plugin-local-dream.
+# Applied by `plugin_manager install_bundle` (or any bundle layer that selects
+# this bundle); `id` is the Loader entry id and `name` is this package.
+# `inject` mirrors the hard dependencies declared in src/index.ts: the official
+# service nodes this plugin cannot work without.
+- insert:
+    - id: local-dream
+      name: '@xinvxueyuan/cordis-plugin-local-dream'
+      inject: [tools]
+      config:
+        mode: auto
